@@ -2,18 +2,29 @@ class CitationDashboard {
     constructor() {
         this.paperDoi = "10.48550/arXiv.2309.08532"; // Default paper DOI
         this.mailto = "s3890442@student.rmit.edu.au"; // Replace with your email
+        this.cacheKey = `citations_${this.paperDoi}`;
         this.init();
     }
 
     init() {
-        document.getElementById('refreshBtn').addEventListener('click', () => this.loadCitations());
-        this.loadCitations();
+        document.getElementById('refreshBtn').addEventListener('click', () => this.loadCitations(true));
+        this.loadCitations(false);
     }
 
-    async loadCitations() {
+    async loadCitations(forceRefresh = false) {
         this.showLoading();
         
         try {
+            // Check cache first unless force refresh
+            if (!forceRefresh) {
+                const cached = localStorage.getItem(this.cacheKey);
+                if (cached) {
+                    const data = JSON.parse(cached);
+                    this.displayData(data);
+                    return;
+                }
+            }
+            
             // First get the paper info
             const paperInfo = await this.getPaperInfo(this.paperDoi);
             const shortId = paperInfo.id.split('/').pop();
@@ -22,6 +33,10 @@ class CitationDashboard {
             const citingWorks = await this.getCitingWorks(shortId);
             
             const data = this.formatCitationData(citingWorks);
+            
+            // Cache the result
+            localStorage.setItem(this.cacheKey, JSON.stringify(data));
+            
             this.displayData(data);
         } catch (error) {
             console.error('Error loading citations:', error);
