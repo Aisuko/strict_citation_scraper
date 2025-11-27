@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kaggle Data Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>Research Paper Citations</h1>
+        <p class="subtitle">Published Papers Only - No Preprints</p>
+        <button id="refreshBtn">Refresh Data</button>
+    </header>
+    
+    <main>
+        <div id="loading" class="hidden">Loading data...</div>
+        <div id="error" class="hidden error"></div>
+        
+        <section id="dataSection" class="hidden">
+            <div id="dataStats"></div>
+            <div id="dataTable"></div>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
