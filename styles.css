@@ -79,6 +79,24 @@ main {
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
+.search-container {
+    margin-bottom: 1rem;
+}
+
+#searchBox {
+    width: 100%;
+    padding: 0.75rem;
+    border: 2px solid #ddd;
+    border-radius: 4px;
+    font-size: 1rem;
+    background: white;
+}
+
+#searchBox:focus {
+    outline: none;
+    border-color: #3498db;
+}
+
 #dataTable {
     background: white;
     border-radius: 8px;
@@ -104,6 +122,18 @@ th {
 
 tr:hover {
     background: #f8f9fa;
+}
+
+.preprint {
+    background: #fff3cd;
+    color: #856404;
+    font-weight: bold;
+}
+
+.peer-reviewed {
+    background: #d4edda;
+    color: #155724;
+    font-weight: bold;
 }
 
 @media (max-width: 768px) {

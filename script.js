@@ -8,6 +8,7 @@ class CitationDashboard {
 
     init() {
         document.getElementById('refreshBtn').addEventListener('click', () => this.loadCitations(true));
+        document.getElementById('searchBox').addEventListener('input', (e) => this.filterTable(e.target.value));
         this.loadCitations(false);
     }
 
@@ -25,14 +26,13 @@ class CitationDashboard {
                 }
             }
             
-            // First get the paper info
-            const paperInfo = await this.getPaperInfo(this.paperDoi);
-            const shortId = paperInfo.id.split('/').pop();
+            // Fetch from both APIs in parallel
+            const [openAlexCitations, semanticScholarCitations] = await Promise.all([
+                this.getOpenAlexCitations(),
+                this.getSemanticScholarCitations()
+            ]);
             
-            // Then get all citing works
-            const citingWorks = await this.getCitingWorks(shortId);
-            
-            const data = this.formatCitationData(citingWorks);
+            const data = this.mergeCitations(openAlexCitations, semanticScholarCitations);
             
             // Cache the result
             localStorage.setItem(this.cacheKey, JSON.stringify(data));
@@ -44,30 +44,31 @@ class CitationDashboard {
         }
     }
 
-    async getPaperInfo(doi) {
-        const url = `https://api.openalex.org/works/doi:${doi}`;
+    async getOpenAlexCitations() {
+        // First get the paper info
+        const url = `https://api.openalex.org/works/doi:${this.paperDoi}`;
         const response = await fetch(`${url}?mailto=${this.mailto}`);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return await response.json();
-    }
-
-    async getCitingWorks(shortWorkId) {
+        if (!response.ok) throw new Error(`OpenAlex HTTP ${response.status}`);
+        const paperInfo = await response.json();
+        const shortId = paperInfo.id.split('/').pop();
+        
+        // Then get all citing works
         const allWorks = [];
         let cursor = '*';
         
         while (cursor) {
-            const url = 'https://api.openalex.org/works';
+            const worksUrl = 'https://api.openalex.org/works';
             const params = new URLSearchParams({
-                filter: `cites:${shortWorkId}`,
+                filter: `cites:${shortId}`,
                 per_page: 200,
                 cursor: cursor,
                 mailto: this.mailto
             });
             
-            const response = await fetch(`${url}?${params}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const worksResponse = await fetch(`${worksUrl}?${params}`);
+            if (!worksResponse.ok) throw new Error(`OpenAlex HTTP ${worksResponse.status}`);
             
-            const page = await response.json();
+            const page = await worksResponse.json();
             allWorks.push(...page.results);
             
             cursor = page.meta?.next_cursor;
@@ -79,30 +80,84 @@ class CitationDashboard {
         return allWorks;
     }
 
-    formatCitationData(citingWorks) {
-        const headers = ['year', 'title', 'doi', 'link'];
-        const rows = citingWorks.map(work => {
-            const year = work.publication_year || 'Unknown';
-            const title = work.display_name || 'Untitled';
+    async getSemanticScholarCitations() {
+        try {
+            const url = `https://api.semanticscholar.org/graph/v1/paper/DOI:${this.paperDoi}/citations`;
+            const params = new URLSearchParams({
+                fields: 'title,year,authors,venue,publicationTypes,publicationDate,citationCount,influentialCitationCount,isOpenAccess,openAccessPdf,fieldsOfStudy,s2FieldsOfStudy,publicationVenue,externalIds',
+                limit: 1000
+            });
+            
+            const response = await fetch(`${url}?${params}`);
+            if (!response.ok) throw new Error(`Semantic Scholar HTTP ${response.status}`);
+            
+            const data = await response.json();
+            return data.data || [];
+        } catch (error) {
+            console.warn('Semantic Scholar API failed:', error.message);
+            return [];
+        }
+    }
+
+    mergeCitations(openAlexWorks, semanticScholarWorks) {
+        const headers = ['year', 'title', 'doi', 'link', 'status', 'source'];
+        const citationMap = new Map();
+        
+        // Process OpenAlex citations
+        openAlexWorks.forEach(work => {
             const rawDoi = work.doi || '';
             const doi = rawDoi.replace('https://doi.org/', '');
+            const key = doi || work.display_name;
             
-            let link;
-            if (doi) {
-                link = `https://doi.org/${doi}`;
-            } else {
-                const primaryLocation = work.primary_location || {};
-                link = primaryLocation.landing_page_url || work.id;
+            if (key) {
+                citationMap.set(key, {
+                    year: work.publication_year || '-',
+                    title: work.display_name || 'Untitled',
+                    doi: doi,
+                    link: doi ? `https://doi.org/${doi}` : (work.primary_location?.landing_page_url || work.id),
+                    status: 'Peer-reviewed',
+                    source: 'OpenAlex'
+                });
             }
-            
-            return { year, title, doi, link };
         });
         
+        // Process Semantic Scholar citations
+        semanticScholarWorks.forEach(item => {
+            const work = item.citingPaper;
+            if (!work) return;
+            
+            const doi = work.externalIds?.DOI || '';
+            const key = doi || work.title;
+            
+            if (key) {
+                const isPreprint = work.publicationTypes?.includes('Preprint') || 
+                                 work.venue?.toLowerCase().includes('arxiv') ||
+                                 work.publicationVenue?.name?.toLowerCase().includes('arxiv');
+                
+                const existing = citationMap.get(key);
+                if (existing) {
+                    // Update source to show both
+                    existing.source = 'OpenAlex + Semantic Scholar';
+                } else {
+                    citationMap.set(key, {
+                        year: work.year || '-',
+                        title: work.title || 'Untitled',
+                        doi: doi,
+                        link: doi ? `https://doi.org/${doi}` : `https://www.semanticscholar.org/paper/${work.paperId}`,
+                        status: isPreprint ? 'Pre-print' : 'Peer-reviewed',
+                        source: 'Semantic Scholar'
+                    });
+                }
+            }
+        });
+        
+        const rows = Array.from(citationMap.values());
         return { headers, rows };
     }
 
     displayData(data) {
         this.hideLoading();
+        this.allData = data; // Store for filtering
         this.showStats(data);
         this.showTable(data);
         document.getElementById('dataSection').classList.remove('hidden');
@@ -111,21 +166,47 @@ class CitationDashboard {
     showStats(data) {
         const stats = document.getElementById('dataStats');
         const yearCounts = this.getYearCounts(data.rows);
+        const statusCounts = this.getStatusCounts(data.rows);
+        
         stats.innerHTML = `
             <h3>Citation Analysis for ${this.paperDoi}</h3>
             <p><strong>Total Citations:</strong> ${data.rows.length}</p>
+            <p><strong>Peer-reviewed:</strong> ${statusCounts['Peer-reviewed'] || 0} | <strong>Pre-prints:</strong> ${statusCounts['Pre-print'] || 0}</p>
             <p><strong>Years:</strong> ${Object.keys(yearCounts).sort().join(', ')}</p>
             <p><strong>Last Updated:</strong> ${new Date().toLocaleString()}</p>
-            <p><em>Data source: OpenAlex API - Peer-reviewed publications only</em></p>
+            <p><em>Data sources: OpenAlex API + Semantic Scholar API</em></p>
         `;
     }
 
     getYearCounts(rows) {
         return rows.reduce((acc, row) => {
-            const year = row.year || 'Unknown';
+            const year = row.year || '-';
             acc[year] = (acc[year] || 0) + 1;
             return acc;
         }, {});
+    }
+
+    getStatusCounts(rows) {
+        return rows.reduce((acc, row) => {
+            const status = row.status || 'Unknown';
+            acc[status] = (acc[status] || 0) + 1;
+            return acc;
+        }, {});
+    }
+
+    filterTable(searchTerm) {
+        if (!this.allData) return;
+        
+        const filteredRows = this.allData.rows.filter(row => 
+            row.title.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+        
+        const filteredData = {
+            headers: this.allData.headers,
+            rows: filteredRows
+        };
+        
+        this.showTable(filteredData);
     }
 
     showTable(data) {
@@ -154,6 +235,9 @@ class CitationDashboard {
                 const td = document.createElement('td');
                 if (header === 'link' && row[header]) {
                     td.innerHTML = `<a href="${row[header]}" target="_blank">View Paper</a>`;
+                } else if (header === 'status') {
+                    td.textContent = row[header] || '';
+                    td.className = row[header] === 'Pre-print' ? 'preprint' : 'peer-reviewed';
                 } else {
                     td.textContent = row[header] || '';
                 }
